@@ -20,10 +20,13 @@ type Items []*core.Item
 type InventoryItems []*core.InventoryItem
 
 var CURRENT_MARKET_TYPE = 0
-var MAX_MARKET_TYPE = 4
+var MAX_MARKET_TYPE = 5
 
 func GetMarketItems() *Items {
-	randTick := (rand.Intn(1574-923+1) + 923)
+	minDelay := 923
+	maxDelay := 1574
+
+	randTick := (rand.Intn(maxDelay-minDelay+1) + minDelay)
 	time.Sleep(time.Millisecond * time.Duration(randTick))
 
 	slog.Info("Getting market items...")
@@ -37,6 +40,8 @@ func GetMarketItems() *Items {
 		wormType = "rare"
 	case 3:
 		wormType = "epic"
+	case 4:
+		wormType = "legendary"
 	default:
 		wormType = "rare"
 	}
@@ -52,14 +57,22 @@ func GetMarketItems() *Items {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		panic(fmt.Sprintf("Status code is not 200, it is %d", resp.StatusCode))
+	var bodyReader io.Reader
+
+	if resp.Header.Get("Content-Encoding") == "br" {
+		bodyReader = brotli.NewReader(resp.Body)
+	} else {
+		bodyReader = resp.Body
 	}
 
-	bodyReader := brotli.NewReader(resp.Body)
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
 		panic(err)
+	}
+
+	if resp.StatusCode != 200 {
+		fmt.Println("Body: ", string(body))
+		panic(fmt.Sprintf("Status code is not 200, it is %d", resp.StatusCode))
 	}
 
 	rawJson := make(map[string]interface{})
@@ -86,6 +99,7 @@ func GetMarketItems() *Items {
 
 	if len(items) == 0 {
 		slog.Warn("MARKET WITH NO ITEMS!!!! POSSIBLY BANNED!!!!")
+		panic("Antiban")
 	}
 
 	return &items
@@ -124,7 +138,14 @@ func GetInventory() InventoryItems {
 		panic(fmt.Sprintf("Status code is not 200, it is %d", resp.StatusCode))
 	}
 
-	bodyReader := brotli.NewReader(resp.Body)
+	var bodyReader io.Reader
+
+	if resp.Header.Get("Content-Encoding") == "br" {
+		bodyReader = brotli.NewReader(resp.Body)
+	} else {
+		bodyReader = resp.Body
+	}
+
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
 		panic(err)
@@ -249,6 +270,8 @@ func buyItemsUntilLimit(balance float64, minBalance float64) float64 {
 				price = CONFIG.Buy.Rare
 			case core.ItemTypeEpic:
 				price = CONFIG.Buy.Epic
+			case core.ItemTypeLegendary:
+				price = CONFIG.Buy.Legendary
 			}
 
 			itemPrice := utils.ToFloat(item.PriceGross)
@@ -301,7 +324,8 @@ func sellAllItems() {
 			price = CONFIG.Sell.Rare
 		case core.ItemTypeEpic:
 			price = CONFIG.Sell.Epic
-
+		case core.ItemTypeLegendary:
+			price = CONFIG.Sell.Legendary
 		}
 
 		status := SellItem(item, price)
@@ -316,11 +340,11 @@ func sellAllItems() {
 
 func run() {
 	balance := GetBalance()
-	minBalance := CONFIG.Buy.Rare
+	minBalance := CONFIG.Buy.Epic
 
 	for {
 
-		if balance < CONFIG.Buy.Rare {
+		if balance < minBalance {
 			sellAllItems()
 			balance = waitPricebleBalance(minBalance)
 			continue

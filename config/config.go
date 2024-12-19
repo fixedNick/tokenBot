@@ -10,16 +10,18 @@ import (
 type Config struct {
 	TelegramData string `yaml:"telegram_data"`
 	Buy          struct {
-		Common   float64 `yaml:"common"`
-		Uncommon float64 `yaml:"uncommon"`
-		Rare     float64 `yaml:"rare"`
-		Epic     float64 `yaml:"epic"`
+		Common    float64 `yaml:"common"`
+		Uncommon  float64 `yaml:"uncommon"`
+		Rare      float64 `yaml:"rare"`
+		Epic      float64 `yaml:"epic"`
+		Legendary float64 `yaml:"legendary"`
 	} `yaml:"buy"`
 	Sell struct {
-		Common   float64 `yaml:"common"`
-		Uncommon float64 `yaml:"uncommon"`
-		Rare     float64 `yaml:"rare"`
-		Epic     float64 `yaml:"epic"`
+		Common    float64 `yaml:"common"`
+		Uncommon  float64 `yaml:"uncommon"`
+		Rare      float64 `yaml:"rare"`
+		Epic      float64 `yaml:"epic"`
+		Legendary float64 `yaml:"legendary"`
 	} `yaml:"sell"`
 }
 

@@ -33,13 +33,15 @@ const (
 	ItemTypeUncommon
 	ItemTypeRare
 	ItemTypeEpic
+	ItemTypeLegendary
 )
 
 var itemTypes = map[string]ItemType{
-	"common":   ItemTypeCommon,
-	"uncommon": ItemTypeUncommon,
-	"rare":     ItemTypeRare,
-	"epic":     ItemTypeEpic,
+	"common":    ItemTypeCommon,
+	"uncommon":  ItemTypeUncommon,
+	"rare":      ItemTypeRare,
+	"epic":      ItemTypeEpic,
+	"legendary": ItemTypeLegendary,
 }
 
 func (item *Item) Type() ItemType {
