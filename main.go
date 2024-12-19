@@ -9,8 +9,11 @@ import (
 	"main/config"
 	"main/core"
 	"main/utils"
+	"math"
 	"math/rand"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -22,14 +25,14 @@ type InventoryItems []*core.InventoryItem
 var CURRENT_MARKET_TYPE = 0
 var MAX_MARKET_TYPE = 5
 
-func GetMarketItems() *Items {
-	minDelay := 923
-	maxDelay := 1574
+func GetMarketItem() *core.Item {
+	minDelay := 1227
+	maxDelay := 2091
 
 	randTick := (rand.Intn(maxDelay-minDelay+1) + minDelay)
 	time.Sleep(time.Millisecond * time.Duration(randTick))
 
-	slog.Info("Getting market items...")
+	slog.Info(fmt.Sprintf("[%.2fms] Getting market items...", float64(randTick)/1000.0))
 	var wormType string
 	switch CURRENT_MARKET_TYPE {
 	case 0:
@@ -71,8 +74,19 @@ func GetMarketItems() *Items {
 	}
 
 	if resp.StatusCode != 200 {
-		fmt.Println("Body: ", string(body))
-		panic(fmt.Sprintf("Status code is not 200, it is %d", resp.StatusCode))
+		slog.Warn(fmt.Sprintf("GetMarketItem WARNING: Status Code: %d. Body: %s", resp.StatusCode, string(body)))
+
+		if resp.StatusCode == 401 {
+			panic("Authorization token has exprired... Program finished")
+		}
+
+		if resp.StatusCode == 400 && strings.Contains(string(body), "too many requests") {
+			slog.Warn("Too many requests. Waiting 5 minutes...")
+			time.Sleep(time.Minute * 5)
+			return nil
+		}
+
+		panic("Unexpected status code")
 	}
 
 	rawJson := make(map[string]interface{})
@@ -102,7 +116,19 @@ func GetMarketItems() *Items {
 		panic("Antiban")
 	}
 
-	return &items
+	var bestPriceItem *core.Item
+	for _, item := range items {
+		if bestPriceItem == nil {
+			bestPriceItem = item
+			continue
+		}
+
+		if utils.ToFloat(bestPriceItem.PriceGross) > utils.ToFloat(item.PriceGross) {
+			bestPriceItem = item
+		}
+	}
+
+	return bestPriceItem
 }
 
 func BuyItem(marketId string) bool {
@@ -118,12 +144,30 @@ func BuyItem(marketId string) bool {
 	}
 
 	defer resp.Body.Close()
-	fmt.Println("Code of buy item: " + fmt.Sprintf("%d", resp.StatusCode))
+
+	if resp.StatusCode != 200 {
+
+		var bodyReader io.Reader
+
+		if resp.Header.Get("Content-Encoding") == "br" {
+			bodyReader = brotli.NewReader(resp.Body)
+		} else {
+			bodyReader = resp.Body
+		}
+
+		body, err := io.ReadAll(bodyReader)
+		if err != nil {
+			panic(err)
+		}
+
+		slog.Warn(fmt.Sprintf("[WARNING] Buying item failed. Status code: %d. Body: %s", resp.StatusCode, string(body)))
+	}
+
 	return resp.StatusCode == 200
 }
 
-func GetInventory() InventoryItems {
-	url := "https://alb.seeddao.org/api/v1/worms/me?page=1"
+func GetInventory(page int) InventoryItems {
+	url := fmt.Sprintf("https://alb.seeddao.org/api/v1/worms/me?page=%d", page)
 	method := "GET"
 
 	req := NewRequest(url, method, nil)
@@ -158,6 +202,11 @@ func GetInventory() InventoryItems {
 
 	var resultItems []*core.InventoryItem
 
+	itemsCount, ok := result["data"].(map[string]interface{})["total"].(float64)
+	if !ok {
+		panic("Items count not in raw json")
+	}
+
 	data, ok := result["data"].(map[string]interface{})["items"]
 	if !ok {
 		panic("Items not in raw json")
@@ -169,6 +218,20 @@ func GetInventory() InventoryItems {
 
 	if err := json.Unmarshal(bytesData, &resultItems); err != nil {
 		panic(err)
+	}
+
+	// Delay before next operations...
+	minDelay := 1227
+	maxDelay := 2091
+
+	randTick := (rand.Intn(maxDelay-minDelay+1) + minDelay)
+	time.Sleep(time.Millisecond * time.Duration(randTick))
+	slog.Info(fmt.Sprintf("[%.2fs] Fetching inventory items. Total items: %d. Current Page: %d", (float64(randTick) / 1000.0), int(itemsCount), page))
+
+	pageSize := 20
+	totalPages := math.Ceil(float64(itemsCount) / float64(pageSize))
+	if int(totalPages) > page {
+		resultItems = append(resultItems, GetInventory(page+1)...)
 	}
 
 	return InventoryItems(resultItems)
@@ -186,7 +249,6 @@ func SellItem(item *core.InventoryItem, price float64) bool {
 	}
 
 	defer resp.Body.Close()
-	fmt.Println("Code of sell item: " + fmt.Sprintf("%d", resp.StatusCode))
 	return resp.StatusCode == 200
 }
 
@@ -256,41 +318,41 @@ func buyItemsUntilLimit(balance float64, minBalance float64) float64 {
 			slog.Info("Buying items finished. Current Balance: " + fmt.Sprintf("%f", balance))
 			return balance
 		}
-		items := GetMarketItems()
+		item := GetMarketItem()
+		if item == nil {
+			randTick := (rand.Intn(1574-923+1) + 923)
+			time.Sleep(time.Millisecond * time.Duration(randTick))
+			continue
+		}
 
-		for _, item := range *items {
+		var price float64 = 0
+		switch item.Type() {
+		case core.ItemTypeCommon:
+			price = CONFIG.Buy.Common
+		case core.ItemTypeUncommon:
+			price = CONFIG.Buy.Uncommon
+		case core.ItemTypeRare:
+			price = CONFIG.Buy.Rare
+		case core.ItemTypeEpic:
+			price = CONFIG.Buy.Epic
+		case core.ItemTypeLegendary:
+			price = CONFIG.Buy.Legendary
+		}
 
-			var price float64 = 0
-			switch item.Type() {
-			case core.ItemTypeCommon:
-				price = CONFIG.Buy.Common
-			case core.ItemTypeUncommon:
-				price = CONFIG.Buy.Uncommon
-			case core.ItemTypeRare:
-				price = CONFIG.Buy.Rare
-			case core.ItemTypeEpic:
-				price = CONFIG.Buy.Epic
-			case core.ItemTypeLegendary:
-				price = CONFIG.Buy.Legendary
+		itemPrice := utils.ToFloat(item.PriceGross)
+
+		if itemPrice <= price && itemPrice <= balance {
+
+			status := BuyItem(item.Id)
+
+			randTick := (rand.Intn(1574-923+1) + 923)
+			time.Sleep(time.Millisecond * time.Duration(randTick))
+
+			if status {
+				balance -= itemPrice
+				slog.Info(fmt.Sprintf("+++ %s [%.2f Gems] | Balance: %.2f Gems", strings.ToUpper(item.WormType), itemPrice, balance))
+				continue
 			}
-
-			itemPrice := utils.ToFloat(item.PriceGross)
-
-			if itemPrice <= price && itemPrice <= balance {
-
-				status := BuyItem(item.Id)
-
-				randTick := (rand.Intn(1574-923+1) + 923)
-				time.Sleep(time.Millisecond * time.Duration(randTick))
-
-				if status == true {
-					balance -= itemPrice
-					slog.Info("Successfully bought item [type] " + item.WormType + " [price] " + fmt.Sprintf("%f", itemPrice))
-					slog.Info("Current Oriental Balance: " + fmt.Sprintf("%f", balance))
-					break
-				}
-			}
-
 		}
 	}
 }
@@ -308,9 +370,13 @@ func waitPricebleBalance(minBalance float64) float64 {
 }
 
 func sellAllItems() {
-	items := GetInventory()
+	slog.Info("Start selling items...")
+	items := GetInventory(1)
+
+	slog.Info(fmt.Sprintf("Items count: %d", len(items)))
+
 	for _, item := range items {
-		if item.OnMarket == true {
+		if item.OnMarket {
 			continue
 		}
 
@@ -330,15 +396,21 @@ func sellAllItems() {
 
 		status := SellItem(item, price)
 		time.Sleep(time.Millisecond * 1452)
-		if status != true {
-			slog.Info("Failed to sell item [id] " + item.Id + " [type] " + item.WormType)
-		} else {
-			slog.Info("Successfully listed to sell item [id] " + item.Id + " [type] " + item.WormType + " [price] " + fmt.Sprintf("%f", price))
+		if status {
+			slog.Info(fmt.Sprintf("--- %s [%.2f Gems] | id: %s", strings.ToUpper(item.WormType), price, item.Id))
+			continue
 		}
+		slog.Info("Failed to sell item [id] " + item.Id + " [type] " + item.WormType)
 	}
 }
 
 func run() {
+
+	if len(os.Args) > 1 {
+		if os.Args[1] == "sell" {
+			sellAllItems()
+		}
+	}
 	balance := GetBalance()
 	minBalance := CONFIG.Buy.Epic
 
