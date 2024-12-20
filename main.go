@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,14 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+)
+
+var (
+	GetMarketItem_Counter = 0
+	GetInventory_Counter  = 0
+	BuyItem_Counter       = 0
+	SellItem_Counter      = 0
+	GetBalance_Counter    = 0
 )
 
 type Items []*core.Item
@@ -55,6 +64,7 @@ func GetMarketItem() *core.Item {
 	req := NewRequest(url, method, nil)
 
 	resp, err := http.DefaultClient.Do(req)
+	GetMarketItem_Counter++
 	if err != nil {
 		panic(err)
 	}
@@ -64,6 +74,11 @@ func GetMarketItem() *core.Item {
 
 	if resp.Header.Get("Content-Encoding") == "br" {
 		bodyReader = brotli.NewReader(resp.Body)
+	} else if resp.Header.Get("Content-Encoding") == "gzip" {
+		bodyReader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			panic(err)
+		}
 	} else {
 		bodyReader = resp.Body
 	}
@@ -81,6 +96,9 @@ func GetMarketItem() *core.Item {
 		}
 
 		if resp.StatusCode == 400 && strings.Contains(string(body), "too many requests") {
+
+			slog.Warn(fmt.Sprintf("Request counts:\n\rGetMarketItem:\t%d\n\rGetInventory:\t%d\n\rSellItem:\t%d\n\rBuyItem:\t%d\n\rGetBalance:\t%d", GetMarketItem_Counter, GetInventory_Counter, SellItem_Counter, BuyItem_Counter, GetBalance_Counter))
+
 			slog.Warn("Too many requests. Waiting 5 minutes...")
 			time.Sleep(time.Minute * 5)
 			return nil
@@ -91,6 +109,7 @@ func GetMarketItem() *core.Item {
 
 	rawJson := make(map[string]interface{})
 	if err = json.Unmarshal(body, &rawJson); err != nil {
+		fmt.Println("body: ", string(body))
 		fmt.Println("Unmarshal error:")
 		panic(err)
 	}
@@ -138,6 +157,7 @@ func BuyItem(marketId string) bool {
 	req := NewRequest(url, method, bytes.NewBuffer([]byte(fmt.Sprintf("{\"market_id\":\"%s\"}", marketId))))
 
 	resp, err := http.DefaultClient.Do(req)
+	BuyItem_Counter++
 	if err != nil {
 		slog.Error(fmt.Sprintf("Error buying item: %s", err.Error()))
 		return false
@@ -173,6 +193,7 @@ func GetInventory(page int) InventoryItems {
 	req := NewRequest(url, method, nil)
 
 	resp, err := http.DefaultClient.Do(req)
+	GetInventory_Counter++
 	if err != nil {
 		panic(err)
 	}
@@ -243,6 +264,7 @@ func SellItem(item *core.InventoryItem, price float64) bool {
 	req := NewRequest(url, method, bytes.NewBuffer([]byte(fmt.Sprintf("{\"worm_id\": \"%s\", \"price\": %d}", item.Id, utils.ToBigInt(price)))))
 
 	resp, err := http.DefaultClient.Do(req)
+	SellItem_Counter++
 	if err != nil {
 		slog.Error(fmt.Sprintf("Error selling item: %s", err.Error()))
 		return false
@@ -259,6 +281,7 @@ func GetBalance() float64 {
 	req := NewRequest(url, method, nil)
 
 	resp, err := http.DefaultClient.Do(req)
+	GetBalance_Counter++
 	if err != nil {
 		panic(err)
 	}
